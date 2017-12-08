@@ -4,6 +4,7 @@ use std::path::Path;
 use std::cell::RefCell;
 use std::time::Duration;
 use serial::SerialPort;
+use std::io::Read;
 
 // Constants
 #[repr(u8)]
@@ -91,9 +92,13 @@ impl Sensor {
         Ok(())
     }
 
-//    pub fn read_bytes(&self) -> Vec<u8> {
-//
-//    }
+    pub fn read_bytes(&self) -> Vec<u8> {
+        let mut port = self.serial_port.borrow_mut();
+        let mut buf: Vec<u8> = (0..255).collect();
+        println!("reading bytes");
+        port.read(&mut buf[..]);
+        buf
+    }
 }
 
 

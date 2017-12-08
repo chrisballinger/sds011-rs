@@ -40,9 +40,12 @@ fn main() {
 
     let path = Path::new(path_string.as_str());
     let sensor = Sensor::new(path).unwrap();
-    sensor.configure(Duration::from_secs(1));
-
     println!("Opened device at path: {}", path_string);
+
+    sensor.configure(Duration::from_secs(1));
+    println!("Configured device");
+    let output = sensor.read_bytes();
+    println!("Read bytes: {:?}", output);
 
 
 }
