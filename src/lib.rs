@@ -1,6 +1,9 @@
 extern crate serial;
 
 use std::path::Path;
+use std::cell::RefCell;
+use std::time::Duration;
+use serial::SerialPort;
 
 // Constants
 #[repr(u8)]
@@ -69,17 +72,28 @@ const PORT_SETTINGS: serial::PortSettings = serial::PortSettings {
 
 
 pub struct Sensor {
-    serial_port: serial::unix::TTYPort
+    serial_port: RefCell<serial::unix::TTYPort>
 }
 
 impl Sensor {
     pub fn new(path: &Path) -> Result<Self, serial::Error> {
         let port = serial::open(path)?;
         let sensor = Sensor {
-            serial_port: port
+            serial_port: RefCell::new(port)
         };
         Ok(sensor)
     }
+
+    pub fn configure(&self, timeout: Duration) -> serial::Result<()> {
+        let mut port = self.serial_port.borrow_mut();
+        port.configure(&PORT_SETTINGS)?;
+        port.set_timeout(timeout)?;
+        Ok(())
+    }
+
+//    pub fn read_bytes(&self) -> Vec<u8> {
+//
+//    }
 }
 
 

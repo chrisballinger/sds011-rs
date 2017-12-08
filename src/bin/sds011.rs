@@ -4,13 +4,15 @@ extern crate clap;
 use clap::{App,Arg};
 use std::env;
 use std::path::Path;
+use std::time::Duration;
 use sds011::*;
 
 const DEVICE_PATH: &str = "DEVICE_PATH";
+const DEFAULT_MAC_DEVICE_PATH: &str = "/dev/tty.wchusbserial1410";
 
 fn main() {
 
-    let device_env = env::var("DEVICE_PATH");
+    let device_env = env::var(DEVICE_PATH);
 
     let matches = App::new("sds011")
         .version("1.0")
@@ -28,7 +30,8 @@ fn main() {
         Err(_) => {
             match matches.value_of(DEVICE_PATH) {
                 Some(path) => String::from(path),
-                None => panic!("No device path found!")
+                None => String::from(DEFAULT_MAC_DEVICE_PATH)
+                //None => panic!("No device path found!")
             }
         }
     };
@@ -37,6 +40,7 @@ fn main() {
 
     let path = Path::new(path_string.as_str());
     let sensor = Sensor::new(path).unwrap();
+    sensor.configure(Duration::from_secs(1));
 
     println!("Opened device at path: {}", path_string);
 

@@ -1,7 +1,10 @@
 # sds011-rs
 
-Rust crate for interacting with SDS011 particle sensor.
+[![Build Status](https://travis-ci.org/chrisballinger/sds011-rs.svg?branch=master)](https://travis-ci.org/chrisballinger/sds011-rs)
 
+Rust crate for interacting with [SDS011](http://aqicn.org/sensor/sds011/) particle sensor. Inspired by [sds011_particle_sensor](https://gitlab.com/frankrich/sds011_particle_sensor) Python project.
+
+This is my first Rust project, mostly as a learning exercise, so it's probably not very good or useful.
 
 
 ## Dependencies
