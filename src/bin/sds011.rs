@@ -44,7 +44,7 @@ fn main() {
 
     sensor.configure(Duration::from_secs(1));
     println!("Configured device");
-    let output = sensor.read_bytes();
+    let output = sensor.read_bytes(10).unwrap();
     println!("Read bytes: {:?}", output);
 
 
