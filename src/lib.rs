@@ -31,6 +31,15 @@ pub enum Command {
     DutyCycle = 8
 }
 
+impl Command {
+    pub fn new(mode: CommandMode, value: Command) -> Vec<u8> {
+        let mut command: Vec<u8> = Vec::new();
+        command.push(mode as u8);
+        command.push(value as u8);
+        command
+    }
+}
+
 // Command to get the current configuration or set it
 #[repr(u8)]
 pub enum CommandMode {
@@ -84,7 +93,6 @@ const PORT_SETTINGS: serial::PortSettings = serial::PortSettings {
 
 pub struct Sensor {
     serial_port: RefCell<serial::unix::TTYPort>,
-    pub sensor_info: Option<SensorInfo>
 }
 
 
@@ -94,7 +102,6 @@ impl Sensor {
         let port = serial::open(path)?;
         let sensor = Sensor {
             serial_port: RefCell::new(port),
-            sensor_info: None
         };
         Ok(sensor)
     }
@@ -119,6 +126,12 @@ impl Sensor {
         let mut port = self.serial_port.borrow_mut();
         let result = port.write_all(bytes.as_slice())?;
         Ok(result)
+    }
+
+
+
+    pub fn get_sensor_info(&self) -> Option<SensorInfo> {
+        None
     }
 }
 
