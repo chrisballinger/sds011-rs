@@ -1,13 +1,20 @@
+#[macro_use] extern crate enum_primitive;
+extern crate num;
 extern crate serial;
+
+use num::FromPrimitive;
 
 use std::path::Path;
 use std::cell::RefCell;
 use std::time::Duration;
+use std::io::{Read, Write, ErrorKind};
+
 use serial::SerialPort;
-use std::io::{Read, Write};
 
 // Constants
+enum_from_primitive! {
 #[repr(u8)]
+#[derive(Debug, PartialEq)]
 pub enum Serial {
     Start = 0xAA,
     End = 0xAB,
@@ -15,13 +22,15 @@ pub enum Serial {
     ResponseByte = 0xC5,
     ReceiveByte = 0xC0,
     CommandTerminator = 0xFF
-}
+}}
 
 const RESPONSE_LENGTH: u32 = 10;
 const COMMAND_LENGTH: u32 = 19;
 
 // Enumeration of SDS011 commands
+enum_from_primitive! {
 #[repr(u8)]
+#[derive(Debug, PartialEq)]
 pub enum Command {
     ReportMode = 2,
     Request = 4,
@@ -29,7 +38,7 @@ pub enum Command {
     WorkState = 6,
     Firmware = 7,
     DutyCycle = 8
-}
+}}
 
 impl Command {
     pub fn new(mode: CommandMode, value: Command) -> Vec<u8> {
@@ -93,6 +102,7 @@ const PORT_SETTINGS: serial::PortSettings = serial::PortSettings {
 
 pub struct Sensor {
     serial_port: RefCell<serial::unix::TTYPort>,
+    sensor_info: Option<RefCell<SensorInfo>>
 }
 
 
@@ -102,6 +112,7 @@ impl Sensor {
         let port = serial::open(path)?;
         let sensor = Sensor {
             serial_port: RefCell::new(port),
+            sensor_info: None
         };
         Ok(sensor)
     }
@@ -116,7 +127,6 @@ impl Sensor {
     pub fn read_bytes(&self, count: usize) -> Result<Vec<u8>, serial::Error> {
         let mut port = self.serial_port.borrow_mut();
         let mut buffer: Vec<u8> = vec![0; count];
-        println!("reading {} bytes", count);
         let result = port.read(&mut buffer[..])?;
         buffer.truncate(result);
         Ok(buffer)
@@ -129,6 +139,112 @@ impl Sensor {
     }
 
 
+    pub fn get_response(&self, command: Option<Command>) -> Result<Vec<u8>, serial::Error> {
+        let mut bytes_received: Vec<u8> = Vec::new();
+
+        let mut counter = 0;
+        loop {
+            counter = counter + 1;
+            let first_read = match self.read_bytes(1) {
+                Ok(read) =>  read,
+                Err(err) => {
+                    if err.kind() == serial::ErrorKind::Io(ErrorKind::TimedOut) {
+                        continue;
+                    } else {
+                        panic!("read error: {:?}", err);
+                    }
+                }
+            };
+//            '''If no bytes are read the sensor might be in sleep mode.
+//                It makes no sense to raise an exception here. The raise condition
+//            should be checked in a context outside of this fuction.'''
+            if first_read.len() > 0 {
+                let first_byte = first_read[0];
+                println!("byte1 #{:?} = {:?}", counter, first_byte);
+                bytes_received.extend_from_slice(&[first_byte]);
+//                # if this is true, serial data is coming in
+                let serial_start = Serial::from_u8(first_byte);
+                if serial_start == Some(Serial::Start) {
+                    println!("found start byte!");
+                    counter = counter + 1;
+                    let next_read = match self.read_bytes(1) {
+                        Ok(read) =>  read,
+                        Err(err) => {
+                            if err.kind() == serial::ErrorKind::Io(ErrorKind::TimedOut) {
+                                continue;
+                            } else {
+                                panic!("read error: {:?}", err);
+                            }
+                        }
+                    };
+                    let next_byte = next_read[0];
+                    println!("byte2 #{:?} = {:X}", counter, next_byte);
+                    let serial_read = Serial::from_u8(next_byte);
+                    println!("serial command: {:?}", serial_read);
+
+                    if ((command != None && command != Some(Command::Request)) &&
+                        serial_read == Some(Serial::ResponseByte)) ||
+                        ((command == None || command == Some(Command::Request)) &&
+                            serial_read == Some(Serial::ReceiveByte) )  {
+                        bytes_received.extend_from_slice(&[next_byte]);
+                        break;
+                    }
+                }
+            } else {
+                if let Some(ref sensor_info) = self.sensor_info {
+                    let info = sensor_info.borrow();
+                    if info.duty_cycle == 0 {
+                        println!("SDS011 A sensor response has not arrived within timeout limit.
+                        If the sensor is in sleeping mode wake it up first!
+                        Returning an empty byte array as response!");
+                    } else {
+                        println!("SDS011 no response. Expected while in dutycycle.");
+                    }
+                }
+                return Ok(Vec::new())
+            }
+        }
+
+        let mut next_word = self.read_bytes(8)?;
+        bytes_received.append(&mut next_word);
+
+        // check if command matches response
+        if command != None && command != Some(Command::Request) {
+            if Serial::from_u8(bytes_received[1]) != Some(Serial::ResponseByte) {
+                panic!("No responseByte  found in the response");
+            }
+            if Command::from_u8(bytes_received[2]) != command {
+                panic!("Third byte of serial datareceived is not the expected response \
+                    to the previous command");
+            }
+        }
+        if command == None || command == Some(Command::Request) {
+            if Serial::from_u8(bytes_received[1]) != Some(Serial::ReceiveByte) {
+                panic!("SDS011 Received byte not found on the Value Request.");
+            }
+        }
+
+        // TODO: check checksum
+
+        // set device_id if needed
+        let len = bytes_received.len();
+        let device_id = [bytes_received[len - 4], bytes_received[len - 3]];
+        println!("device_id {:X}{:X}", device_id[0], device_id[1]);
+        if let Some(ref sensor_info) = self.sensor_info {
+            let mut info = sensor_info.borrow_mut();
+            if info.device_id == None {
+                info.device_id = Some(device_id);
+            } else if let Some(existing_device_id) = info.device_id {
+                if device_id != existing_device_id {
+                    panic!("SDS011 Data received  does not belong \
+                            to this device with id.");
+                }
+            }
+        }
+
+        Ok(bytes_received)
+    }
+
 
     pub fn get_sensor_info(&self) -> Option<SensorInfo> {
         None
@@ -140,7 +256,7 @@ pub struct SensorInfo {
     report_mode: ReportMode,
     work_state: WorkState,
     duty_cycle: u8,
-    device_id: [u8; 2]
+    device_id: Option<[u8; 2]>
 }
 
 
