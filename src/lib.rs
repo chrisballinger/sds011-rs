@@ -51,6 +51,7 @@ impl Command {
 
 // Command to get the current configuration or set it
 #[repr(u8)]
+#[derive(Debug, PartialEq)]
 pub enum CommandMode {
     Getting = 0,
     Setting = 1
@@ -60,6 +61,7 @@ pub enum CommandMode {
 //In passive mode one has to send a request command,
 //in order to get the measurement values as a response.
 #[repr(u8)]
+#[derive(Debug, PartialEq)]
 pub enum ReportMode {
     Initiative = 0,
     Passive = 1
@@ -69,6 +71,7 @@ pub enum ReportMode {
 //In sleeping mode it does not send any data, the fan is turned off.
 //To get data one has to wake it up'
 #[repr(u8)]
+#[derive(Debug, PartialEq)]
 pub enum WorkState {
     Sleeping = 0,
     Measuring = 1
@@ -84,6 +87,7 @@ pub enum WorkState {
 //The concentration is calculated by assuming
 //different mean sphere diameters of pm10 or pm2.5 particles.
 #[repr(u8)]
+#[derive(Debug, PartialEq)]
 pub enum UnitsOfMeasure {
     // µg / m³, the mode of the sensors firmware
     MassConcentrationEuropean = 0,
@@ -102,17 +106,16 @@ const PORT_SETTINGS: serial::PortSettings = serial::PortSettings {
 
 pub struct Sensor {
     serial_port: RefCell<serial::unix::TTYPort>,
-    sensor_info: Option<RefCell<SensorInfo>>
+    sensor_info: RefCell<SensorInfo>
 }
-
-
 
 impl Sensor {
     pub fn new(path: &Path) -> Result<Self, serial::Error> {
         let port = serial::open(path)?;
+        let info = SensorInfo::default();
         let sensor = Sensor {
             serial_port: RefCell::new(port),
-            sensor_info: None
+            sensor_info: RefCell::new(info)
         };
         Ok(sensor)
     }
@@ -136,6 +139,41 @@ impl Sensor {
         let mut port = self.serial_port.borrow_mut();
         let result = port.write_all(bytes.as_slice())?;
         Ok(result)
+    }
+
+    pub fn generate_checksum(data: Vec<u8>) -> Option<u8> {
+        let data_length = data.len();
+        let expected_length = [RESPONSE_LENGTH - 2, COMMAND_LENGTH - 2];
+
+        if !expected_length.contains(&(data_length as u32)) {
+            // invalid checksum length
+            eprintln!("checksum error: invalid data length {:?}", data.len());
+            return None
+        }
+
+        // check first byte
+        if Serial::from_u8(data[0]) != Some(Serial::Start) {
+            eprintln!("checksum error: missing start byte");
+            return None
+        }
+        // check second byte
+        let expected_second_byte = [Serial::SendByte as u8, Serial::ReceiveByte as u8, Serial::ResponseByte as u8];
+        let second_byte = data[1];
+        if !expected_second_byte.contains(&second_byte) {
+            eprintln!("checksum error: second byte is invalid");
+            return None
+        }
+        let third_byte = data[2];
+        if second_byte != Serial::ReceiveByte as u8 && Command::from_u8(third_byte) == None {
+            eprintln!("checksum error: data command byte is invalid");
+            return None
+        }
+        let mut checksum: u8 = 0;
+        for i in 2..data.len() {
+            checksum = checksum.wrapping_add(data[i]);
+        }
+        checksum = checksum % 255;
+        Some(checksum)
     }
 
 
@@ -191,15 +229,13 @@ impl Sensor {
                     }
                 }
             } else {
-                if let Some(ref sensor_info) = self.sensor_info {
-                    let info = sensor_info.borrow();
-                    if info.duty_cycle == 0 {
-                        println!("SDS011 A sensor response has not arrived within timeout limit.
+                let info = self.sensor_info.borrow();
+                if info.duty_cycle == Some(0) {
+                    println!("SDS011 A sensor response has not arrived within timeout limit.
                         If the sensor is in sleeping mode wake it up first!
                         Returning an empty byte array as response!");
-                    } else {
-                        println!("SDS011 no response. Expected while in dutycycle.");
-                    }
+                } else {
+                    println!("SDS011 no response. Expected while in dutycycle.");
                 }
                 return Ok(Vec::new())
             }
@@ -224,38 +260,40 @@ impl Sensor {
             }
         }
 
-        // TODO: check checksum
+        let len = bytes_received.len();
+
+        let checksum_byte = bytes_received[len - 2];
+        let checksum_data: Vec<u8> = bytes_received[0..len-2].to_vec();
+        let generated_checksum = Sensor::generate_checksum(checksum_data);
+        if generated_checksum != Some(checksum_byte) {
+            panic!("Invalid checksum! {:?} != {:?}", generated_checksum, checksum_byte);
+        } else {
+            println!("Checksum match: {:?} == {:?}", generated_checksum, checksum_byte);
+        }
 
         // set device_id if needed
-        let len = bytes_received.len();
         let device_id = [bytes_received[len - 4], bytes_received[len - 3]];
         println!("device_id {:X}{:X}", device_id[0], device_id[1]);
-        if let Some(ref sensor_info) = self.sensor_info {
-            let mut info = sensor_info.borrow_mut();
-            if info.device_id == None {
-                info.device_id = Some(device_id);
-            } else if let Some(existing_device_id) = info.device_id {
-                if device_id != existing_device_id {
-                    panic!("SDS011 Data received  does not belong \
+        let mut info = self.sensor_info.borrow_mut();
+        if info.device_id == None {
+            info.device_id = Some(device_id);
+        } else if let Some(existing_device_id) = info.device_id {
+            if device_id != existing_device_id {
+                panic!("SDS011 Data received  does not belong \
                             to this device with id.");
-                }
             }
         }
 
         Ok(bytes_received)
     }
-
-
-    pub fn get_sensor_info(&self) -> Option<SensorInfo> {
-        None
-    }
 }
 
+#[derive(Debug, Default)]
 pub struct SensorInfo {
-    firmware: [u8; 3],
-    report_mode: ReportMode,
-    work_state: WorkState,
-    duty_cycle: u8,
+    firmware: Option<[u8; 3]>,
+    report_mode: Option<ReportMode>,
+    work_state: Option<WorkState>,
+    duty_cycle: Option<u8>,
     device_id: Option<[u8; 2]>
 }
 
