@@ -8,6 +8,7 @@ use std::path::Path;
 use std::cell::RefCell;
 use std::time::Duration;
 use std::io::{Read, Write, ErrorKind};
+use std::time::SystemTime;
 
 use serial::SerialPort;
 
@@ -46,6 +47,12 @@ pub struct SendData {
     data: Vec<u8>
 }
 
+#[derive(Debug)]
+pub struct SensorMeasurement {
+    pm2_5: f32,
+    pm10: f32,
+    timestamp: SystemTime
+}
 
 impl SendData {
     pub fn get_duty_cycle() -> Self {
@@ -244,6 +251,17 @@ impl Sensor {
         }
 
         Ok(response)
+    }
+
+    pub fn get_measurement(&self) -> Result<SensorMeasurement, serial::Error> {
+        let response = self.get_response(None)?;
+        assert!(response.len() > 0);
+        let data = response[2..6].to_vec();
+        let pm2_5 = (data[0] as f32 + data[1] as f32 * 256.0) / 10.0;
+        let pm10 = (data[2] as f32 + data[3] as f32 * 256.0) / 10.0;
+        let timestamp = SystemTime::now();
+        let measurement = SensorMeasurement { pm2_5, pm10, timestamp };
+        Ok(measurement)
     }
 
     pub fn generate_checksum(data: &Vec<u8>) -> Option<u8> {

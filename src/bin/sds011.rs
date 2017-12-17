@@ -52,5 +52,8 @@ fn main() {
     let response = sensor.get_sensor_info().unwrap();
     println!("response bytes: {:?}", response);
 
-
+    for i in 0..100 {
+        let measurement = sensor.get_measurement().unwrap();
+        println!("measurement: {:?}", measurement);
+    }
 }
