@@ -14,7 +14,7 @@ use serial::SerialPort;
 // Constants
 enum_from_primitive! {
 #[repr(u8)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Serial {
     Start = 0xAA,
     End = 0xAB,
@@ -24,13 +24,13 @@ pub enum Serial {
     CommandTerminator = 0xFF
 }}
 
-const RESPONSE_LENGTH: u32 = 10;
-const COMMAND_LENGTH: u32 = 19;
+const RESPONSE_LENGTH: usize = 10;
+const COMMAND_LENGTH: usize = 19;
 
 // Enumeration of SDS011 commands
 enum_from_primitive! {
 #[repr(u8)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum Command {
     ReportMode = 2,
     Request = 4,
@@ -40,42 +40,98 @@ pub enum Command {
     DutyCycle = 8
 }}
 
-impl Command {
-    pub fn new(mode: CommandMode, value: Command) -> Vec<u8> {
-        let mut command: Vec<u8> = Vec::new();
-        command.push(mode as u8);
-        command.push(value as u8);
-        command
+pub struct SendData {
+    command: Command,
+    mode: CommandMode,
+    data: Vec<u8>
+}
+
+
+impl SendData {
+    pub fn get_duty_cycle() -> Self {
+        SendData::new(Command::DutyCycle, CommandMode::Getting, 0)
+    }
+
+    pub fn get_report_mode() -> Self {
+        SendData::new(Command::ReportMode, CommandMode::Getting, 0)
+    }
+
+    pub fn get_firmware() -> Self {
+        SendData::new(Command::Firmware, CommandMode::Getting, 0)
+    }
+
+
+    pub fn set_duty_cycle(value: u8) -> Self {
+        SendData::new(Command::DutyCycle, CommandMode::Setting, value)
+    }
+
+    pub fn set_work_state(work_state: WorkState) -> Self {
+        SendData::new(Command::WorkState, CommandMode::Setting, work_state as u8)
+    }
+
+
+
+    pub fn new(command: Command, mode: CommandMode, value: u8) -> Self {
+        let data = vec![value];
+        SendData { command, mode, data }
+    }
+
+    pub fn to_command_data(&self) -> Vec<u8> {
+        let command = self.command as u8;
+        let mode = self.mode as u8;
+        let mut bytes_to_send: Vec<u8> = vec![Serial::Start as u8, Serial::SendByte as u8, command, mode];
+
+        for i in 0..11 {
+            if i < self.data.len() {
+                let byte = self.data[i];
+                bytes_to_send.push(byte);
+            } else {
+                bytes_to_send.push(0);
+            }
+        }
+        bytes_to_send.push(Serial::CommandTerminator as u8);
+        bytes_to_send.push(Serial::CommandTerminator as u8);
+
+        let checksum = Sensor::generate_checksum(&bytes_to_send).unwrap();
+        bytes_to_send.push(checksum);
+        bytes_to_send.push(Serial::End as u8);
+
+        assert_eq!(bytes_to_send.len(), COMMAND_LENGTH);
+
+        bytes_to_send
     }
 }
 
 // Command to get the current configuration or set it
+enum_from_primitive! {
 #[repr(u8)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Clone, Copy)]
 pub enum CommandMode {
     Getting = 0,
     Setting = 1
-}
+}}
 
 //Report modes of the sensor:
 //In passive mode one has to send a request command,
 //in order to get the measurement values as a response.
+enum_from_primitive! {
 #[repr(u8)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum ReportMode {
     Initiative = 0,
     Passive = 1
-}
+}}
 
 //the Work states:
 //In sleeping mode it does not send any data, the fan is turned off.
 //To get data one has to wake it up'
+enum_from_primitive! {
 #[repr(u8)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum WorkState {
     Sleeping = 0,
     Measuring = 1
-}
+}}
 
 
 //The unit of the measured values.
@@ -86,14 +142,15 @@ pub enum WorkState {
 //particles / 0.01 cubic foot (pcs/0.01cft).
 //The concentration is calculated by assuming
 //different mean sphere diameters of pm10 or pm2.5 particles.
+enum_from_primitive! {
 #[repr(u8)]
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Copy, Clone)]
 pub enum UnitsOfMeasure {
     // µg / m³, the mode of the sensors firmware
     MassConcentrationEuropean = 0,
     // pcs/0.01 cft (particles / 0.01 cubic foot )
     ParticleConcentrationImperial = 1
-}
+}}
 
 const PORT_SETTINGS: serial::PortSettings = serial::PortSettings {
     baud_rate:    serial::Baud9600,
@@ -127,6 +184,40 @@ impl Sensor {
         Ok(())
     }
 
+    /// reads sensor info from device
+    pub fn get_sensor_info(&self) -> serial::Result<()> {
+        let first_response = self.get_response(None)?;
+        if first_response.len() == 0 {
+            // device is sleeping?
+            let measuring = SendData::set_work_state(WorkState::Measuring);
+            self.send(&measuring)?;
+            let duty_cycle = SendData::set_duty_cycle(0);
+            self.send(&duty_cycle)?;
+        }
+
+        let get_duty_cycle = SendData::get_duty_cycle();
+        let mut response = self.send(&get_duty_cycle)?;
+        let duty_cycle = response[1];
+
+        let get_report_mode = SendData::get_report_mode();
+        response = self.send(&get_report_mode)?;
+        let report_mode = ReportMode::from_u8(response[1]);
+
+        let get_firmware = SendData::get_firmware();
+        response = self.send(&get_firmware)?;
+        let firmware = [response[0], response[1], response[2]];
+
+        let mut info = self.sensor_info.borrow_mut();
+        info.work_state = Some(WorkState::Measuring);
+        info.duty_cycle = Some(duty_cycle);
+        info.report_mode = report_mode;
+        info.firmware = Some(firmware);
+
+        println!("firmware: {:?}", info.firmware_string());
+
+        Ok(())
+    }
+
     pub fn read_bytes(&self, count: usize) -> Result<Vec<u8>, serial::Error> {
         let mut port = self.serial_port.borrow_mut();
         let mut buffer: Vec<u8> = vec![0; count];
@@ -137,15 +228,29 @@ impl Sensor {
 
     pub fn write_bytes(&self, bytes: Vec<u8>) -> std::io::Result<()> {
         let mut port = self.serial_port.borrow_mut();
-        let result = port.write_all(bytes.as_slice())?;
-        Ok(result)
+        port.write_all(bytes.as_slice())
     }
 
-    pub fn generate_checksum(data: Vec<u8>) -> Option<u8> {
+    pub fn send(&self, send_data: &SendData) -> Result<Vec<u8>, serial::Error> {
+        let bytes_to_write = send_data.to_command_data();
+        self.write_bytes(bytes_to_write)?;
+        let mut response = self.get_response(Some(send_data.command))?;
+        if response.len() != RESPONSE_LENGTH {
+            eprintln!("received {:?} bytes expected {:?}", response.len(), RESPONSE_LENGTH);
+        }
+
+        if send_data.command != Command::Request {
+            response = response[3..response.len() - 2].to_vec();
+        }
+
+        Ok(response)
+    }
+
+    pub fn generate_checksum(data: &Vec<u8>) -> Option<u8> {
         let data_length = data.len();
         let expected_length = [RESPONSE_LENGTH - 2, COMMAND_LENGTH - 2];
 
-        if !expected_length.contains(&(data_length as u32)) {
+        if !expected_length.contains(&(data_length)) {
             // invalid checksum length
             eprintln!("checksum error: invalid data length {:?}", data.len());
             return None
@@ -198,7 +303,7 @@ impl Sensor {
 //            should be checked in a context outside of this fuction.'''
             if first_read.len() > 0 {
                 let first_byte = first_read[0];
-                println!("byte1 #{:?} = {:?}", counter, first_byte);
+                println!("byte1 #{:?} = {:X}", counter, first_byte);
                 bytes_received.extend_from_slice(&[first_byte]);
 //                # if this is true, serial data is coming in
                 let serial_start = Serial::from_u8(first_byte);
@@ -224,7 +329,7 @@ impl Sensor {
                         serial_read == Some(Serial::ResponseByte)) ||
                         ((command == None || command == Some(Command::Request)) &&
                             serial_read == Some(Serial::ReceiveByte) )  {
-                        bytes_received.extend_from_slice(&[next_byte]);
+                        bytes_received.push(next_byte);
                         break;
                     }
                 }
@@ -264,7 +369,7 @@ impl Sensor {
 
         let checksum_byte = bytes_received[len - 2];
         let checksum_data: Vec<u8> = bytes_received[0..len-2].to_vec();
-        let generated_checksum = Sensor::generate_checksum(checksum_data);
+        let generated_checksum = Sensor::generate_checksum(&checksum_data);
         if generated_checksum != Some(checksum_byte) {
             panic!("Invalid checksum! {:?} != {:?}", generated_checksum, checksum_byte);
         } else {
@@ -295,6 +400,15 @@ pub struct SensorInfo {
     work_state: Option<WorkState>,
     duty_cycle: Option<u8>,
     device_id: Option<[u8; 2]>
+}
+
+impl SensorInfo {
+    pub fn firmware_string(&self) -> Option<String> {
+        if let Some(firmware) = self.firmware {
+            return Some(format!("{:02}{:02}{:02}", firmware[0], firmware[1], firmware[2]))
+        }
+        None
+    }
 }
 
 

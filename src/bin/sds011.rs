@@ -49,6 +49,8 @@ fn main() {
     //let output = sensor.read_bytes(10).unwrap();
     //println!("Read bytes: {:?}", output);
 
-    let response = sensor.get_response(None).unwrap();
+    let response = sensor.get_sensor_info().unwrap();
     println!("response bytes: {:?}", response);
+
+
 }
