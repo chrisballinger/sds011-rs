@@ -1,6 +1,11 @@
-#[macro_use] extern crate enum_primitive;
+#[macro_use]
+extern crate enum_primitive;
 extern crate num;
 extern crate serial;
+#[macro_use]
+extern crate serde_derive;
+extern crate serde;
+extern crate chrono;
 
 use num::FromPrimitive;
 
@@ -11,6 +16,14 @@ use std::io::{Read, Write, ErrorKind};
 use std::time::SystemTime;
 
 use serial::SerialPort;
+use chrono::prelude::*;
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SensorMeasurement {
+    timestamp: DateTime<Utc>,
+    pm2_5: f32,
+    pm10: f32
+}
 
 // Constants
 enum_from_primitive! {
@@ -47,12 +60,7 @@ pub struct SendData {
     data: Vec<u8>
 }
 
-#[derive(Debug)]
-pub struct SensorMeasurement {
-    pm2_5: f32,
-    pm10: f32,
-    timestamp: SystemTime
-}
+
 
 impl SendData {
     pub fn get_duty_cycle() -> Self {
@@ -259,8 +267,8 @@ impl Sensor {
         let data = response[2..6].to_vec();
         let pm2_5 = (data[0] as f32 + data[1] as f32 * 256.0) / 10.0;
         let pm10 = (data[2] as f32 + data[3] as f32 * 256.0) / 10.0;
-        let timestamp = SystemTime::now();
-        let measurement = SensorMeasurement { pm2_5, pm10, timestamp };
+        let timestamp = Utc::now();
+        let measurement = SensorMeasurement { timestamp, pm2_5, pm10 };
         Ok(measurement)
     }
 
@@ -321,12 +329,12 @@ impl Sensor {
 //            should be checked in a context outside of this fuction.'''
             if first_read.len() > 0 {
                 let first_byte = first_read[0];
-                println!("byte1 #{:?} = {:X}", counter, first_byte);
+                //println!("byte1 #{:?} = {:X}", counter, first_byte);
                 bytes_received.extend_from_slice(&[first_byte]);
 //                # if this is true, serial data is coming in
                 let serial_start = Serial::from_u8(first_byte);
                 if serial_start == Some(Serial::Start) {
-                    println!("found start byte!");
+                    //println!("found start byte!");
                     counter = counter + 1;
                     let next_read = match self.read_bytes(1) {
                         Ok(read) =>  read,
@@ -339,9 +347,9 @@ impl Sensor {
                         }
                     };
                     let next_byte = next_read[0];
-                    println!("byte2 #{:?} = {:X}", counter, next_byte);
+                    //println!("byte2 #{:?} = {:X}", counter, next_byte);
                     let serial_read = Serial::from_u8(next_byte);
-                    println!("serial command: {:?}", serial_read);
+                    //println!("serial command: {:?}", serial_read);
 
                     if ((command != None && command != Some(Command::Request)) &&
                         serial_read == Some(Serial::ResponseByte)) ||
@@ -391,12 +399,12 @@ impl Sensor {
         if generated_checksum != Some(checksum_byte) {
             panic!("Invalid checksum! {:?} != {:?}", generated_checksum, checksum_byte);
         } else {
-            println!("Checksum match: {:?} == {:?}", generated_checksum, checksum_byte);
+            //println!("Checksum match: {:?} == {:?}", generated_checksum, checksum_byte);
         }
 
         // set device_id if needed
         let device_id = [bytes_received[len - 4], bytes_received[len - 3]];
-        println!("device_id {:X}{:X}", device_id[0], device_id[1]);
+        //println!("device_id {:X}{:X}", device_id[0], device_id[1]);
         let mut info = self.sensor_info.borrow_mut();
         if info.device_id == None {
             info.device_id = Some(device_id);
