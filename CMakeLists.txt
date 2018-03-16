@@ -6,6 +6,7 @@ set(CMAKE_CXX_STANDARD 11)
 set(SOURCE_FILES
         src/lib.rs
         src/bin/sds011.rs
+        src/commands.rs
         Cargo.toml)
 
 add_executable(sds011 ${SOURCE_FILES})

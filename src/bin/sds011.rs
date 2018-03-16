@@ -7,12 +7,12 @@ use clap::{App,Arg};
 use std::env;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
-use sds011::*;
 use chrono::prelude::*;
-
+use sds011::sensor::Sensor;
 
 const OUTPUT_DIR: &str = "OUTPUT_DIR";
 const DEVICE_PATH: &str = "DEVICE_PATH";
+const NUM_READINGS: &str = "NUM_READINGS";
 const DEFAULT_MAC_DEVICE_PATH: &str = "/dev/tty.wchusbserial1410";
 
 fn main() {
@@ -31,6 +31,11 @@ fn main() {
             .long("output-dir")
             .help("Sets a custom output directory")
             .takes_value(true))
+        .arg(Arg::with_name(NUM_READINGS)
+            .short("n")
+            .long("num-readings")
+            .help("Number of sensor readings before exit. Zero means continue forever. Default = 0")
+            .takes_value(true))
         .get_matches();
 
     let path_string: String = match device_env {
@@ -48,6 +53,8 @@ fn main() {
         Some(path) =>  PathBuf::from(path),
         None => out_dir_ref
     };
+    let num_readings_str = matches.value_of(NUM_READINGS).unwrap_or("0");
+    let num_readings: i32 = num_readings_str.parse().unwrap_or(0);
 
     println!("Output file directory: {:?}", out_dir);
 
@@ -72,10 +79,16 @@ fn main() {
     println!("Recording measurements to file: {:?}", output_file_path);
     let mut csv_writer = csv::Writer::from_path(output_file_path.as_path()).unwrap();
 
-    for i in 0..100 {
+    let mut i = 0;
+    loop {
+        if num_readings != 0 && i >= num_readings {
+            break
+        }
         let measurement = sensor.get_measurement().unwrap();
-        println!("measurement: {:?}", measurement);
+        println!("#{:?}/{:?}: {:?}", i+1, num_readings, measurement);
         csv_writer.serialize(measurement);
         csv_writer.flush();
+        i += 1;
     }
+    println!("All done. See ya later!");
 }
